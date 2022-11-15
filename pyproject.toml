@@ -8,7 +8,7 @@ version = "0.0.1"
 authors = [
   { name="Parantapa Bhattacharya", email="pb+pypi@parantapa.net" },
 ]
-description = "A library for durable async function calls."
+description = "Durable Local and Remote Function Calls"
 readme = "README.rst"
 requires-python = ">=3.10"
 classifiers = [
@@ -18,7 +18,6 @@ classifiers = [
 ]
 
 dependencies = [
-    "pydantic",
     "apsw",
     "rpyc",
     "rich",
@@ -30,6 +29,9 @@ include-package-data = true
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+"*" = ["*.sql"]
 
 [project.urls]
 "Homepage" = "http://github.com/parantapa/durable-call"
