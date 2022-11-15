@@ -19,8 +19,11 @@ def fragile_hello_world(who: str) -> str:
     if who == "hitler":
         raise ValueError("nope")
 
-    if random.random() < 0.9:
+    if random.random() < 0.5:
         raise RuntimeError("bad things happen sometimes")
+
+    if random.random() < 0.5:
+        raise Exception("something unexpected")
 
     return "Hello %s" % who
 
