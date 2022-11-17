@@ -1,18 +1,21 @@
 """Sample faulty program."""
 
-import asyncio
+import asyncio as aio
 import random
 from contextlib import closing
 
 import apsw
+import structlog
 
 from durable_call.durable import DurableFunctionExecutor, IntermittantError, FatalError
+from durable_call.utils import cancel_all_tasks
 from setup_logging import setup_logging
 
 ONE_MIN = 60.0
 ONE_SEC = 1.0
 
 dce = DurableFunctionExecutor()
+logger = structlog.get_logger()
 
 
 def fragile_hello_world(who: str) -> str:
@@ -28,8 +31,8 @@ def fragile_hello_world(who: str) -> str:
     return "Hello %s" % who
 
 
-@dce.durable(max_retry_time=ONE_MIN, inter_retry_time=ONE_SEC)
-def durable_hello_world(call_id: str, who: str) -> str:
+@dce.durable_function(max_retry_time=ONE_MIN, inter_retry_time=ONE_SEC)
+async def durable_hello_world(call_id: str, who: str) -> str:
     _ = call_id
     try:
         return fragile_hello_world(who)
@@ -44,28 +47,34 @@ async def hello_world_caller():
     try:
         fut = durable_hello_world("call1", "world")
         result = await fut
-        print(result)
+        logger.info(result)
 
         fut = durable_hello_world("call2", "hitler")
         result = await fut
-        print(result)
-    except asyncio.CancelledError:
-        print("hello world caller cancelled")
+        logger.info(result)
+    except aio.CancelledError:
+        logger.info("hello world caller cancelled")
+    except Exception as e:
+        logger.error("hello world caller got unexpected exception: %s" % e)
+        cancel_all_tasks()
 
 
-async def main():
+async def task_main():
     dbpath = "hello.db"
     con = apsw.Connection(dbpath)
-    with closing(con):
-        dce.initialize(con)
+    try:
+        with closing(con):
+            dce.initialize(con)
 
-        task1 = asyncio.create_task(hello_world_caller())
-        task2 = asyncio.create_task(dce.execute_pending_calls())
+            task1 = aio.create_task(hello_world_caller())
+            task2 = aio.create_task(dce.task_cleanup())
 
-        await task1
-        await task2
+            await task1
+            await task2
+    except aio.CancelledError:
+        pass
 
 
 if __name__ == "__main__":
     setup_logging()
-    asyncio.run(main())
+    aio.run(task_main())
