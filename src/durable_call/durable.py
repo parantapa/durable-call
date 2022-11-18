@@ -53,6 +53,40 @@ class FragileFunctionExecutionError(Exception):
         return f"{self.msg}; call_id={self.call_id!r} func_name={self.func_name!r}"
 
 
+class ResultLoggingFailedError(FragileFunctionExecutionError):
+    def __init__(self, call_id: str, func_name: str):
+        msg = "Failed to write result to log file"
+        super().__init__(msg, call_id, func_name)
+
+
+class CallTimeout(FragileFunctionExecutionError):
+    def __init__(self, call_id: str, func_name: str):
+        msg = "Call timeout"
+        super().__init__(msg, call_id, func_name)
+
+
+class CallFatalError(FragileFunctionExecutionError):
+    def __init__(self, call_id: str, func_name: str):
+        msg = "Call raised fatal error"
+        super().__init__(msg, call_id, func_name)
+
+
+class CallCancelledError(FragileFunctionExecutionError):
+    def __init__(self, call_id: str, func_name: str):
+        msg = "Call cancelled"
+        super().__init__(msg, call_id, func_name)
+
+
+class ParamsChangedError(ValueError):
+    def __init__(self, call_id: str, cur_params: str, prev_params: str):
+        self.call_id = call_id
+        self.cur_params = cur_params
+        self.prev_params = prev_params
+
+    def __str__(self):
+        return f"Call id {self.call_id!r} called with different params"
+
+
 def _save_result(
     con: apsw.Connection,
     call_id: str,
@@ -72,9 +106,7 @@ def _save_result(
             )
     except Exception:
         log.error("failed to save result", exc_info=True)
-        exc = FragileFunctionExecutionError(
-            "Failed to write result to log file", call_id, func_name
-        )
+        exc = ResultLoggingFailedError(call_id, func_name)
         result_fut.set_exception(exc)
         return
 
@@ -97,7 +129,7 @@ async def _call_fragile_func(
     now = time.monotonic()
 
     if now - start_time > retry_policy.max_retry_time:
-        exc = FragileFunctionExecutionError("Call timeout", call_id, func_name)
+        exc = CallTimeout(call_id, func_name)
         result_fut.set_exception(exc)
         return
 
@@ -120,9 +152,7 @@ async def _call_fragile_func(
         log.info("call failed: intermittant error", error=str(e))
     except FatalError as e:
         log.error("call failed: fatal error", error=str(e), exc_info=True)
-        exc = FragileFunctionExecutionError(
-            "Call failed due to fatal error", call_id, func_name
-        )
+        exc = CallFatalError(call_id, func_name)
         result_fut.set_exception(exc)
         return
     except Exception as e:
@@ -166,7 +196,7 @@ async def _task_robust_call_fragile_func(
             await aio.sleep(retry_policy.inter_retry_time)
     except aio.CancelledError as e:
         log.warning("call cancelled", error=str(e))
-        exc = FragileFunctionExecutionError("Call cancelled", call_id, func_name)
+        exc = CallCancelledError(call_id, func_name)
         result_fut.set_exception(exc)
         return
 
@@ -202,27 +232,36 @@ class DurableFunctionExecutor:
         if func_name not in self.func_cache:
             raise RuntimeError("Call to unknown function: %r" % func_name)
 
-        # Check if this call is already in progress
-        if call_id in self.pending_func_call:
-            return self.pending_func_call[call_id][1]
-
         with self.con:
-            # Check if this call has already completed
+            # Check if we already have the result in the call log
             ret = cstore.get_call(self.con, call_id)
             if ret is not None:
-                fut = loop.create_future()
-                fut.set_result(ret.call_result)
-                return fut
+                if call_params != ret.call_params:
+                    raise ParamsChangedError(call_id, call_params, ret.call_params)
 
-            # Create a pending call
-            now = datetime.utcnow().timestamp()
-            cstore.add_call_params(
-                self.con,
-                call_id=call_id,
-                function_name=func_name,
-                start_time=now,
-                call_params=call_params,
-            )
+                if ret.call_result is not None:
+                    fut = loop.create_future()
+                    fut.set_result(ret.call_result)
+                    return fut
+                else:
+                    # We have saved the parameters, but not the result.
+                    # Dont log the params in the db again.
+
+                    # Check if this call is already in progress
+                    if call_id in self.pending_func_call:
+                        _, fut = self.pending_func_call[call_id]
+                        return fut
+
+            else:
+                # Log the params in the db
+                now = datetime.utcnow().timestamp()
+                cstore.add_call_params(
+                    self.con,
+                    call_id=call_id,
+                    function_name=func_name,
+                    start_time=now,
+                    call_params=call_params,
+                )
 
         fragile_func, retry_policy = self.func_cache[func_name]
         fut = loop.create_future()
