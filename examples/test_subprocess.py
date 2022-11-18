@@ -7,7 +7,7 @@ from contextlib import closing
 import apsw
 import structlog
 
-from durable_call.durable import (
+from durable_call import (
     FatalError,
     IntermittantError,
     DurableFunctionExecutor,

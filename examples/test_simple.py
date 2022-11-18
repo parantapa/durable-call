@@ -7,12 +7,12 @@ from contextlib import closing
 import apsw
 import structlog
 
-from durable_call.durable import (
+from durable_call import (
     DurableFunctionExecutor,
-    IntermittantError,
-    FatalError,
     CallFatalError,
     ParamsChangedError,
+    IntermittantError,
+    FatalError,
 )
 from durable_call.utils import cancel_all_tasks
 from setup_logging import setup_logging
