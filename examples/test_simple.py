@@ -13,6 +13,7 @@ from durable_call import (
     ParamsChangedError,
     IntermittantError,
     FatalError,
+    make_robust,
 )
 from durable_call.utils import cancel_all_tasks
 from setup_logging import setup_logging
@@ -37,7 +38,8 @@ def fragile_hello_world(who: str) -> str:
     return "Hello %s" % who
 
 
-@dce.durable_function(max_retry_time=ONE_MIN, inter_retry_time=ONE_SEC)
+@dce.make_durable
+@make_robust(max_retry_time=ONE_MIN, inter_retry_time=ONE_SEC)
 async def durable_hello_world(call_id: str, who: str) -> str:
     _ = call_id
     try:

@@ -12,6 +12,7 @@ from durable_call import (
     IntermittantError,
     DurableFunctionExecutor,
     CallTimeout,
+    make_robust,
 )
 from durable_call.utils import cancel_all_tasks
 from setup_logging import setup_logging
@@ -30,6 +31,8 @@ async def fragile_sleep_and_get_even_number(sleep_time: int) -> str:
         )
     except OSError as e:
         raise FatalError(f"Unexpected error: %s" % e)
+    except ValueError as e:
+        raise FatalError(f"Unexpected error: %s" % e)
 
     try:
         sout, _ = await asyncio.wait_for(proc.communicate(), timeout=1.0)
@@ -46,7 +49,8 @@ async def fragile_sleep_and_get_even_number(sleep_time: int) -> str:
             proc.kill()
 
 
-@dce.durable_function(max_retry_time=10, inter_retry_time=1)
+@dce.make_durable
+@make_robust(max_retry_time=10, inter_retry_time=1)
 async def durable_sleep_and_get_even_number(call_id: str, params: str) -> str:
     _ = call_id
     try:

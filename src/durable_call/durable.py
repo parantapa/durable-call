@@ -3,15 +3,14 @@
 import asyncio as aio
 from functools import wraps
 from datetime import datetime
-from typing import Callable, Awaitable, Optional, cast
+from typing import Callable, Awaitable, Optional
 
 import apsw
 import structlog
-from structlog import BoundLogger
+from structlog.contextvars import bound_contextvars
 
 from . import call_store as cstore
 from .robust import (
-    make_robust,
     FatalError,
     RobustCallTimeout,
 )
@@ -19,8 +18,6 @@ from .robust import (
 FragileFunction = Callable[[str, str], Awaitable[str]]
 DurableFunction = Callable[[str, str], aio.Future[str]]
 FragileToDurableWrapper = Callable[[FragileFunction], DurableFunction]
-
-RobustFragileFunction = Callable[[BoundLogger, str, str], Awaitable[str]]
 
 logger = structlog.get_logger()
 
@@ -69,57 +66,53 @@ class ParamsChangedError(ValueError):
         return f"Call id {self.call_id!r} called with different params"
 
 
-async def _task_robust_call_fragile_func(
+async def _task_call_fragile_func(
     con: apsw.Connection,
     call_id: str,
     func_name: str,
-    robust_fragile_func: RobustFragileFunction,
+    fragile_func: FragileFunction,
     call_params: str,
     result_fut: aio.Future[str],
 ) -> None:
-    log = logger.bind(
-        call_id=call_id,
-        func_name=func_name,
-    )
-
-    try:
+    with bound_contextvars(call_id=call_id, func_name=func_name):
         try:
-            log.info("attempting call")
-            result = await robust_fragile_func(call_id, call_params, log=log)
-            log.info("call succeeded")
-        except RobustCallTimeout:
-            exc = CallTimeout(call_id, func_name)
-            result_fut.set_exception(exc)
-            return
-        except FatalError:
-            exc = CallFatalError(call_id, func_name)
-            result_fut.set_exception(exc)
-            return
-        except Exception as e:
-            result_fut.set_exception(e)
-            return
+            try:
+                logger.info("attempting call")
+                result = await fragile_func(call_id, call_params)
+                logger.info("call succeeded")
+            except RobustCallTimeout:
+                exc = CallTimeout(call_id, func_name)
+                result_fut.set_exception(exc)
+                return
+            except FatalError:
+                exc = CallFatalError(call_id, func_name)
+                result_fut.set_exception(exc)
+                return
+            except Exception as e:
+                result_fut.set_exception(e)
+                return
 
-        try:
-            now = datetime.utcnow().timestamp()
-            with con:
-                cstore.add_call_result(
-                    con,
-                    call_id=call_id,
-                    end_time=now,
-                    call_result=result,
-                )
+            try:
+                now = datetime.utcnow().timestamp()
+                with con:
+                    cstore.add_call_result(
+                        con,
+                        call_id=call_id,
+                        end_time=now,
+                        call_result=result,
+                    )
 
-            log.info("result saved")
-            result_fut.set_result(result)
-        except Exception:
-            log.error("failed to save result", exc_info=True)
-            exc = ResultLoggingFailedError(call_id, func_name)
+                logger.info("result saved")
+                result_fut.set_result(result)
+            except Exception:
+                logger.error("failed to save result", exc_info=True)
+                exc = ResultLoggingFailedError(call_id, func_name)
+                result_fut.set_exception(exc)
+
+        except aio.CancelledError:
+            logger.warning("call cancelled")
+            exc = CallCancelledError(call_id, func_name)
             result_fut.set_exception(exc)
-
-    except aio.CancelledError:
-        log.warning("call cancelled")
-        exc = CallCancelledError(call_id, func_name)
-        result_fut.set_exception(exc)
 
 
 class DurableFunctionExecutor:
@@ -129,7 +122,7 @@ class DurableFunctionExecutor:
         self,
     ):
         self.con: Optional[apsw.Connection] = None
-        self.func_cache: dict[str, RobustFragileFunction] = {}
+        self.func_cache: dict[str, FragileFunction] = {}
         self.pending_func_call: dict[str, tuple[aio.Task, aio.Future[str]]] = {}
 
     def initialize(self, con: apsw.Connection) -> None:
@@ -137,10 +130,8 @@ class DurableFunctionExecutor:
         cstore.create_schema(con)
         self.load_unfinished_calls()
 
-    def add_function(
-        self, func_name: str, robust_fragile_func: RobustFragileFunction
-    ) -> None:
-        self.func_cache[func_name] = robust_fragile_func
+    def add_function(self, func_name: str, fragile_func: FragileFunction) -> None:
+        self.func_cache[func_name] = fragile_func
 
     def make_durable_call_fragile_func(
         self, call_id: str, func_name: str, call_params: str
@@ -184,18 +175,18 @@ class DurableFunctionExecutor:
                     call_params=call_params,
                 )
 
-        robust_fragile_func = self.func_cache[func_name]
+        fragile_func = self.func_cache[func_name]
         fut = loop.create_future()
         task = aio.create_task(
-            _task_robust_call_fragile_func(
+            _task_call_fragile_func(
                 con=self.con,
                 call_id=call_id,
                 func_name=func_name,
-                robust_fragile_func=robust_fragile_func,
+                fragile_func=fragile_func,
                 call_params=call_params,
                 result_fut=fut,
             ),
-            name=f"robust_call_fragile_func:{call_id}",
+            name=f"call_fragile_func:{call_id}",
         )
         self.pending_func_call[call_id] = (task, fut)
 
@@ -218,18 +209,18 @@ class DurableFunctionExecutor:
                         "Call to unknown function: %r" % uc.function_name
                     )
 
-                robust_fragile_func = self.func_cache[uc.function_name]
+                fragile_func = self.func_cache[uc.function_name]
                 fut = loop.create_future()
                 task = aio.create_task(
-                    _task_robust_call_fragile_func(
+                    _task_call_fragile_func(
                         con=self.con,
                         call_id=uc.call_id,
                         func_name=uc.function_name,
-                        robust_fragile_func=robust_fragile_func,
+                        fragile_func=fragile_func,
                         call_params=uc.call_params,
                         result_fut=fut,
                     ),
-                    name=f"robust_call_fragile_func:{uc.call_id}",
+                    name=f"call_fragile_func:{uc.call_id}",
                 )
                 self.pending_func_call[uc.call_id] = (task, fut)
 
@@ -248,24 +239,16 @@ class DurableFunctionExecutor:
                 task.cancel()
                 del self.pending_func_call[call_id]
 
-    def durable_function(self, *args, **kwargs) -> FragileToDurableWrapper:
-        def wrapper(fragile_func: FragileFunction) -> DurableFunction:
-            func_name = fragile_func.__qualname__
+    def make_durable(self, fragile_func: FragileFunction) -> DurableFunction:
+        func_name = fragile_func.__qualname__
 
-            robust_fragile_func = make_robust(*args, **kwargs)(fragile_func)
-            robust_fragile_func = cast(RobustFragileFunction, robust_fragile_func)
+        self.add_function(
+            func_name=func_name,
+            fragile_func=fragile_func,
+        )
 
-            self.add_function(
-                func_name=func_name,
-                robust_fragile_func=robust_fragile_func,
-            )
+        @wraps(fragile_func)
+        def durable_func(call_id: str, call_params: str) -> aio.Future[str]:
+            return self.make_durable_call_fragile_func(call_id, func_name, call_params)
 
-            @wraps(fragile_func)
-            def durable_func(call_id: str, call_params: str) -> aio.Future[str]:
-                return self.make_durable_call_fragile_func(
-                    call_id, func_name, call_params
-                )
-
-            return durable_func
-
-        return wrapper
+        return durable_func
