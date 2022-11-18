@@ -1,13 +1,19 @@
-"""Sample faulty program."""
+"""Simple fragile function test."""
 
-import asyncio as aio
+import asyncio
 import random
 from contextlib import closing
 
 import apsw
 import structlog
 
-from durable_call.durable import DurableFunctionExecutor, IntermittantError, FatalError
+from durable_call.durable import (
+    DurableFunctionExecutor,
+    IntermittantError,
+    FatalError,
+    CallFatalError,
+    ParamsChangedError,
+)
 from durable_call.utils import cancel_all_tasks
 from setup_logging import setup_logging
 
@@ -43,38 +49,50 @@ async def durable_hello_world(call_id: str, who: str) -> str:
 
 
 async def hello_world_caller():
-    print("hello world caller started")
+    logger.info("hello world caller started")
     try:
-        fut = durable_hello_world("call1", "world")
-        result = await fut
+        result = await durable_hello_world("call1", "world")
         logger.info(result)
 
-        fut = durable_hello_world("call2", "hitler")
-        result = await fut
-        logger.info(result)
-    except aio.CancelledError:
+        try:
+            result = await durable_hello_world("call1", "world1")
+            logger.info(result)
+        except ParamsChangedError as e:
+            logger.info("got expected fatal error", error=e)
+        else:
+            logger.warning("didn't expected fatal error")
+
+        try:
+            result = await durable_hello_world("call2", "hitler")
+            logger.info(result)
+        except CallFatalError as e:
+            logger.info("got expected fatal error", error=e)
+        else:
+            logger.warning("didn't expected fatal error")
+    except asyncio.CancelledError:
         logger.info("hello world caller cancelled")
     except Exception as e:
         logger.error("hello world caller got unexpected exception: %s" % e)
+    finally:
         cancel_all_tasks()
 
 
 async def task_main():
-    dbpath = "hello.db"
+    dbpath = "test_simple.db"
     con = apsw.Connection(dbpath)
     try:
         with closing(con):
             dce.initialize(con)
 
-            task1 = aio.create_task(hello_world_caller())
-            task2 = aio.create_task(dce.task_cleanup())
+            task1 = asyncio.create_task(hello_world_caller(), name="hello_world_caller")
+            task2 = asyncio.create_task(dce.task_cleanup(), name="dce_task_cleaner")
 
             await task1
             await task2
-    except aio.CancelledError:
+    except asyncio.CancelledError:
         pass
 
 
 if __name__ == "__main__":
     setup_logging()
-    aio.run(task_main())
+    asyncio.run(task_main())
