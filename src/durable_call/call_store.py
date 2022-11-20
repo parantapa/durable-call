@@ -18,10 +18,10 @@ create table if not exists call_log (
     call_id text primary key,
     function_name text not null,
     start_time real not null,
-    call_params text not null,
+    call_params blob not null,
 
     end_time real,
-    call_result text
+    call_result blob
 )
 """
 
@@ -73,14 +73,14 @@ where call_id = :call_id
 class GetUnfinishedCallsReturnType:
     call_id: str
     function_name: str
-    call_params: str
+    call_params: bytes
 
 
 @dataclass
 class GetCallReturnType:
     function_name: str
-    call_params: str
-    call_result: Optional[str]
+    call_params: bytes
+    call_result: Optional[bytes]
 
 
 def create_schema(connection: ConnectionType) -> None:
@@ -111,7 +111,7 @@ def add_call_params(
     call_id: str,
     function_name: str,
     start_time: float,
-    call_params: str,
+    call_params: bytes,
 ) -> None:
     """Query add_call_params."""
     cursor = connection.cursor()
@@ -133,7 +133,7 @@ def add_call_params(
 
 
 def add_call_result(
-    connection: ConnectionType, call_id: str, end_time: float, call_result: str
+    connection: ConnectionType, call_id: str, end_time: float, call_result: bytes
 ) -> None:
     """Query add_call_result."""
     cursor = connection.cursor()

@@ -40,10 +40,13 @@ def fragile_hello_world(who: str) -> str:
 
 @dce.make_durable
 @make_robust(max_retry_time=ONE_MIN, inter_retry_time=ONE_SEC)
-async def durable_hello_world(call_id: str, who: str) -> str:
+async def durable_hello_world(call_id: str, who: bytes) -> bytes:
     _ = call_id
     try:
-        return fragile_hello_world(who)
+        param = who.decode()
+        ret = fragile_hello_world(param)
+        ret = ret.encode()
+        return ret
     except RuntimeError as e:
         raise IntermittantError(e)
     except ValueError as e:
@@ -53,11 +56,11 @@ async def durable_hello_world(call_id: str, who: str) -> str:
 async def hello_world_caller():
     logger.info("hello world caller started")
     try:
-        result = await durable_hello_world("call1", "world")
+        result = await durable_hello_world("call1", "world".encode())
         logger.info(result)
 
         try:
-            result = await durable_hello_world("call1", "world1")
+            result = await durable_hello_world("call1", "world1".encode())
             logger.info(result)
         except ParamsChangedError as e:
             logger.info("got expected fatal error", error=e)
@@ -65,7 +68,7 @@ async def hello_world_caller():
             logger.warning("didn't expected fatal error")
 
         try:
-            result = await durable_hello_world("call2", "hitler")
+            result = await durable_hello_world("call2", "hitler".encode())
             logger.info(result)
         except CallFatalError as e:
             logger.info("got expected fatal error", error=e)

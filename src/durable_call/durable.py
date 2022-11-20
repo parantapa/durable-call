@@ -15,8 +15,8 @@ from .robust import (
     RobustCallTimeout,
 )
 
-FragileFunction = Callable[[str, str], Awaitable[str]]
-DurableFunction = Callable[[str, str], aio.Future[str]]
+FragileFunction = Callable[[str, bytes], Awaitable[bytes]]
+DurableFunction = Callable[[str, bytes], aio.Future[bytes]]
 FragileToDurableWrapper = Callable[[FragileFunction], DurableFunction]
 
 logger = structlog.get_logger()
@@ -57,7 +57,7 @@ class CallCancelledError(FragileFunctionExecutionError):
 
 
 class ParamsChangedError(ValueError):
-    def __init__(self, call_id: str, cur_params: str, prev_params: str):
+    def __init__(self, call_id: str, cur_params: bytes, prev_params: bytes):
         self.call_id = call_id
         self.cur_params = cur_params
         self.prev_params = prev_params
@@ -71,8 +71,8 @@ async def _task_call_fragile_func(
     call_id: str,
     func_name: str,
     fragile_func: FragileFunction,
-    call_params: str,
-    result_fut: aio.Future[str],
+    call_params: bytes,
+    result_fut: aio.Future[bytes],
 ) -> None:
     with bound_contextvars(call_id=call_id, func_name=func_name):
         try:
@@ -123,7 +123,7 @@ class DurableFunctionExecutor:
     ):
         self.con: Optional[apsw.Connection] = None
         self.func_cache: dict[str, FragileFunction] = {}
-        self.pending_func_call: dict[str, tuple[aio.Task, aio.Future[str]]] = {}
+        self.pending_func_call: dict[str, tuple[aio.Task, aio.Future[bytes]]] = {}
 
     def initialize(self, con: apsw.Connection) -> None:
         self.con = con
@@ -134,8 +134,8 @@ class DurableFunctionExecutor:
         self.func_cache[func_name] = fragile_func
 
     def make_durable_call_fragile_func(
-        self, call_id: str, func_name: str, call_params: str
-    ) -> aio.Future[str]:
+        self, call_id: str, func_name: str, call_params: bytes
+    ) -> aio.Future[bytes]:
         assert self.con is not None
 
         loop = aio.get_running_loop()
@@ -248,7 +248,7 @@ class DurableFunctionExecutor:
         )
 
         @wraps(fragile_func)
-        def durable_func(call_id: str, call_params: str) -> aio.Future[str]:
+        def durable_func(call_id: str, call_params: bytes) -> aio.Future[bytes]:
             return self.make_durable_call_fragile_func(call_id, func_name, call_params)
 
         return durable_func
