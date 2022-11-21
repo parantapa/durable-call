@@ -6,10 +6,10 @@
 create table if not exists call_log (
     call_id text primary key,
     function_name text not null,
-    start_time real not null,
+    start_time text not null,
     call_params blob not null,
 
-    end_time real,
+    end_time text,
     call_result blob
 ) ;
 
@@ -20,14 +20,14 @@ on call_log (call_result)
 where call_result is null ;
 
 -- query: add_call_params
--- params: call_id: str!, function_name: str!, start_time: float!, call_params: bytes!
+-- params: call_id: str!, function_name: str!, start_time: str!, call_params: bytes!
 
 insert into call_log values (
     :call_id, :function_name, :start_time, :call_params, null, null
 ) ;
 
 -- query: add_call_result
--- params: call_id: str!, end_time: float!, call_result: bytes!
+-- params: call_id: str!, end_time: str!, call_result: bytes!
 
 update call_log
 set end_time = :end_time, call_result = :call_result

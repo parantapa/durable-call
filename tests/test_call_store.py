@@ -21,7 +21,7 @@ def test_simple():
         call_store.create_schema(con)
 
         with con:
-            start_time = datetime.utcnow().timestamp()
+            start_time = datetime.utcnow().isoformat()
             call_store.add_call_params(
                 con, call_id, function_name, start_time, params_pkl
             )
@@ -32,7 +32,7 @@ def test_simple():
             assert calls[0].call_id == call_id
 
         with con:
-            end_time = datetime.utcnow().timestamp()
+            end_time = datetime.utcnow().isoformat()
             call_store.add_call_result(con, call_id, end_time, result_pkl)
 
         with con:

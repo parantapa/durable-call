@@ -17,10 +17,10 @@ SCHEMA[
 create table if not exists call_log (
     call_id text primary key,
     function_name text not null,
-    start_time real not null,
+    start_time text not null,
     call_params blob not null,
 
-    end_time real,
+    end_time text,
     call_result blob
 )
 """
@@ -110,7 +110,7 @@ def add_call_params(
     connection: ConnectionType,
     call_id: str,
     function_name: str,
-    start_time: float,
+    start_time: str,
     call_params: bytes,
 ) -> None:
     """Query add_call_params."""
@@ -133,7 +133,7 @@ def add_call_params(
 
 
 def add_call_result(
-    connection: ConnectionType, call_id: str, end_time: float, call_result: bytes
+    connection: ConnectionType, call_id: str, end_time: str, call_result: bytes
 ) -> None:
     """Query add_call_result."""
     cursor = connection.cursor()

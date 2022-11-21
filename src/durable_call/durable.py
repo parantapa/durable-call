@@ -93,7 +93,7 @@ async def _task_call_fragile_func(
                 return
 
             try:
-                now = datetime.utcnow().timestamp()
+                now = datetime.utcnow().isoformat()
                 with con:
                     cstore.add_call_result(
                         con,
@@ -166,7 +166,7 @@ class DurableFunctionExecutor:
 
             else:
                 # Log the params in the db
-                now = datetime.utcnow().timestamp()
+                now = datetime.utcnow().isoformat()
                 cstore.add_call_params(
                     self.con,
                     call_id=call_id,
