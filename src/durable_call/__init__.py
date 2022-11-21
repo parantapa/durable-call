@@ -1,9 +1,7 @@
 from .durable import (
     DurableFunctionExecutor,
-    ResultLoggingFailedError,
-    CallTimeout,
-    CallFatalError,
-    CallCancelledError,
+    CallFailed,
+    CallCancelled,
     ParamsChangedError,
 )
 

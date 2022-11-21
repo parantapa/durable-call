@@ -11,7 +11,7 @@ from durable_call import (
     FatalError,
     IntermittantError,
     DurableFunctionExecutor,
-    CallTimeout,
+    CallFailed,
     make_robust,
 )
 from durable_call.utils import cancel_all_tasks
@@ -71,8 +71,8 @@ async def shell_func_caller():
         try:
             result = await durable_sleep_and_get_even_number("call2", "1".encode())
             logger.info(result)
-        except CallTimeout as e:
-            logger.info("got expected fatal error", error=e)
+        except CallFailed as e:
+            logger.info("got expected error", error=str(e))
         else:
             logger.warning("didn't expected fatal error")
 

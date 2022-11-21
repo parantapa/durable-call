@@ -1,5 +1,6 @@
 """Wrapper to make fragile functions durable."""
 
+from uuid import uuid4
 import asyncio as aio
 from functools import wraps
 from datetime import datetime
@@ -10,50 +11,12 @@ import structlog
 from structlog.contextvars import bound_contextvars
 
 from . import call_store as cstore
-from .robust import (
-    FatalError,
-    RobustCallTimeout,
-)
 
 FragileFunction = Callable[[str, bytes], Awaitable[bytes]]
 DurableFunction = Callable[[str, bytes], aio.Future[bytes]]
 FragileToDurableWrapper = Callable[[FragileFunction], DurableFunction]
 
 logger = structlog.get_logger()
-
-
-class FragileFunctionExecutionError(Exception):
-    def __init__(self, msg: str, call_id: str, func_name: str):
-        self.msg = msg
-        self.call_id = call_id
-        self.func_name = func_name
-
-    def __str__(self):
-        return f"{self.msg}; call_id={self.call_id!r} func_name={self.func_name!r}"
-
-
-class ResultLoggingFailedError(FragileFunctionExecutionError):
-    def __init__(self, call_id: str, func_name: str):
-        msg = "Failed to write result to log file"
-        super().__init__(msg, call_id, func_name)
-
-
-class CallTimeout(FragileFunctionExecutionError):
-    def __init__(self, call_id: str, func_name: str):
-        msg = "Call timeout"
-        super().__init__(msg, call_id, func_name)
-
-
-class CallFatalError(FragileFunctionExecutionError):
-    def __init__(self, call_id: str, func_name: str):
-        msg = "Call raised fatal error"
-        super().__init__(msg, call_id, func_name)
-
-
-class CallCancelledError(FragileFunctionExecutionError):
-    def __init__(self, call_id: str, func_name: str):
-        msg = "Call cancelled"
-        super().__init__(msg, call_id, func_name)
 
 
 class ParamsChangedError(ValueError):
@@ -64,6 +27,36 @@ class ParamsChangedError(ValueError):
 
     def __str__(self):
         return f"Call id {self.call_id!r} called with different params"
+
+
+class CallFailed(RuntimeError):
+    """Call Failed."""
+
+
+class CallCancelled(RuntimeError):
+    """Call Cancelled."""
+
+
+def _add_call_result(con: apsw.Connection, call_id: str, result: bytes) -> None:
+    now = datetime.utcnow().isoformat()
+    with con:
+        cstore.add_call_result(
+            con,
+            call_id=call_id,
+            end_time=now,
+            call_result=result,
+        )
+
+
+def _add_call_error(con: apsw.Connection, call_id: str, error: str) -> None:
+    now = datetime.utcnow().isoformat()
+    with con:
+        cstore.add_call_error(
+            con,
+            call_id=call_id,
+            end_time=now,
+            call_error=error,
+        )
 
 
 async def _task_call_fragile_func(
@@ -78,40 +71,26 @@ async def _task_call_fragile_func(
         try:
             try:
                 logger.info("attempting call")
+
                 result = await fragile_func(call_id, call_params)
                 logger.info("call succeeded")
-            except RobustCallTimeout:
-                exc = CallTimeout(call_id, func_name)
-                result_fut.set_exception(exc)
-                return
-            except FatalError:
-                exc = CallFatalError(call_id, func_name)
-                result_fut.set_exception(exc)
-                return
-            except Exception as e:
-                result_fut.set_exception(e)
-                return
 
-            try:
-                now = datetime.utcnow().isoformat()
-                with con:
-                    cstore.add_call_result(
-                        con,
-                        call_id=call_id,
-                        end_time=now,
-                        call_result=result,
-                    )
-
+                _add_call_result(con, call_id, result)
                 logger.info("result saved")
-                result_fut.set_result(result)
-            except Exception:
-                logger.error("failed to save result", exc_info=True)
-                exc = ResultLoggingFailedError(call_id, func_name)
-                result_fut.set_exception(exc)
 
+                result_fut.set_result(result)
+            except Exception as e:
+                error_id = str(uuid4())
+                logger.error("call failed", error_id=error_id, exc_info=True)
+
+                error = f"error_id={error_id} error={e}"
+                _add_call_error(con, call_id, error)
+
+                result_fut.set_exception(CallFailed(error))
+                return
         except aio.CancelledError:
             logger.warning("call cancelled")
-            exc = CallCancelledError(call_id, func_name)
+            exc = CallCancelled("call cancelled")
             result_fut.set_exception(exc)
 
 
@@ -154,6 +133,10 @@ class DurableFunctionExecutor:
                 if ret.call_result is not None:
                     fut = loop.create_future()
                     fut.set_result(ret.call_result)
+                    return fut
+                elif ret.call_error is not None:
+                    fut = loop.create_future()
+                    fut.set_exception(CallFailed(ret.call_error))
                     return fut
                 else:
                     # We have saved the parameters, but not the result.

@@ -9,11 +9,11 @@ import structlog
 
 from durable_call import (
     DurableFunctionExecutor,
-    CallFatalError,
+    CallFailed,
     ParamsChangedError,
-    IntermittantError,
-    FatalError,
     make_robust,
+    IntermittantError,
+    FatalError
 )
 from durable_call.utils import cancel_all_tasks
 from setup_logging import setup_logging
@@ -63,15 +63,15 @@ async def hello_world_caller():
             result = await durable_hello_world("call1", "world1".encode())
             logger.info(result)
         except ParamsChangedError as e:
-            logger.info("got expected fatal error", error=e)
+            logger.info("got expected error", error=e)
         else:
             logger.warning("didn't expected fatal error")
 
         try:
             result = await durable_hello_world("call2", "hitler".encode())
             logger.info(result)
-        except CallFatalError as e:
-            logger.info("got expected fatal error", error=e)
+        except CallFailed as e:
+            logger.info("got expected call fail error", error=str(e))
         else:
             logger.warning("didn't expected fatal error")
     except asyncio.CancelledError:

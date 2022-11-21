@@ -21,7 +21,8 @@ create table if not exists call_log (
     call_params blob not null,
 
     end_time text,
-    call_result blob
+    call_result blob,
+    call_error text
 )
 """
 
@@ -39,7 +40,7 @@ QUERY[
     "add_call_params"
 ] = """
 insert into call_log values (
-    :call_id, :function_name, :start_time, :call_params, null, null
+    :call_id, :function_name, :start_time, :call_params, null, null, null
 )
 """
 
@@ -52,18 +53,26 @@ where call_id = :call_id
 """
 
 QUERY[
+    "add_call_error"
+] = """
+update call_log
+set end_time = :end_time, call_error = :call_error
+where call_id = :call_id
+"""
+
+QUERY[
     "get_unfinished_calls"
 ] = """
 select call_id, function_name, call_params
 from call_log
-where call_result is null
+where end_time is null
 order by start_time asc
 """
 
 QUERY[
     "get_call"
 ] = """
-select function_name, call_params, call_result
+select function_name, call_params, call_result, call_error
 from call_log
 where call_id = :call_id
 """
@@ -81,6 +90,7 @@ class GetCallReturnType:
     function_name: str
     call_params: bytes
     call_result: Optional[bytes]
+    call_error: Optional[str]
 
 
 def create_schema(connection: ConnectionType) -> None:
@@ -153,6 +163,27 @@ def add_call_result(
         ) from e
 
 
+def add_call_error(
+    connection: ConnectionType, call_id: str, end_time: str, call_error: str
+) -> None:
+    """Query add_call_error."""
+    cursor = connection.cursor()
+    try:
+        sql = QUERY["add_call_error"]
+
+        query_args = {
+            "call_id": call_id,
+            "end_time": end_time,
+            "call_error": call_error,
+        }
+        cursor.execute(sql, query_args)
+
+    except Exception as e:
+        raise RuntimeError(
+            "An unexpected exception occurred while executing query: add_call_error"
+        ) from e
+
+
 def get_unfinished_calls(
     connection: ConnectionType,
 ) -> Iterable[GetUnfinishedCallsReturnType]:
@@ -188,7 +219,10 @@ def get_call(connection: ConnectionType, call_id: str) -> Optional[GetCallReturn
             return None
         else:
             return GetCallReturnType(
-                function_name=row[0], call_params=row[1], call_result=row[2]
+                function_name=row[0],
+                call_params=row[1],
+                call_result=row[2],
+                call_error=row[3],
             )
     except Exception as e:
         raise RuntimeError(
@@ -232,6 +266,19 @@ def explain_queries() -> None:
         except Exception as e:
             raise RuntimeError(
                 "An unexpected exception occurred while executing query plan for: add_call_result"
+            ) from e
+
+        try:
+            sql = QUERY["add_call_error"]
+            sql = "EXPLAIN " + sql
+
+            query_args = {"call_id": None, "end_time": None, "call_error": None}
+            cursor.execute(sql, query_args)
+
+            print("Query add_call_error is syntactically valid.")
+        except Exception as e:
+            raise RuntimeError(
+                "An unexpected exception occurred while executing query plan for: add_call_error"
             ) from e
 
         try:

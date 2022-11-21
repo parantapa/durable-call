@@ -10,7 +10,8 @@ create table if not exists call_log (
     call_params blob not null,
 
     end_time text,
-    call_result blob
+    call_result blob,
+    call_error text
 ) ;
 
 -- schema: call_log_index1
@@ -23,7 +24,7 @@ where call_result is null ;
 -- params: call_id: str!, function_name: str!, start_time: str!, call_params: bytes!
 
 insert into call_log values (
-    :call_id, :function_name, :start_time, :call_params, null, null
+    :call_id, :function_name, :start_time, :call_params, null, null, null
 ) ;
 
 -- query: add_call_result
@@ -33,18 +34,25 @@ update call_log
 set end_time = :end_time, call_result = :call_result
 where call_id = :call_id ;
 
+-- query: add_call_error
+-- params: call_id: str!, end_time: str!, call_error: str!
+
+update call_log
+set end_time = :end_time, call_error = :call_error
+where call_id = :call_id ;
+
 -- query: get_unfinished_calls
 -- return*: call_id: str!, function_name: str!, call_params: bytes!
 
 select call_id, function_name, call_params
 from call_log
-where call_result is null
+where end_time is null
 order by start_time asc ;
 
 -- query: get_call
 -- params: call_id: str!
--- return?: function_name: str!, call_params: bytes!, call_result: bytes
+-- return?: function_name: str!, call_params: bytes!, call_result: bytes, call_error: str
 
-select function_name, call_params, call_result
+select function_name, call_params, call_result, call_error
 from call_log
 where call_id = :call_id ;
